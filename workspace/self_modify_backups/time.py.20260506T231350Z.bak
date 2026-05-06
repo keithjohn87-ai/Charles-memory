@@ -1,0 +1,20 @@
+"""Current time — returns the user's local time as a string."""
+from __future__ import annotations
+
+from datetime import datetime
+
+from core.tools import tool
+
+
+@tool(
+    name="current_time",
+    summary="Return the user's current local time as a formatted string.",
+    triggers=("time", "what time", "current time", "clock"),
+    schema={
+        "type": "object",
+        "properties": {},
+    },
+)
+def current_time() -> str:
+    now = datetime.now()
+    return now.strftime("%A, %B %d, %Y at %I:%M %p %Z")

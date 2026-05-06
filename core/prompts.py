@@ -44,7 +44,12 @@ def _grounding() -> str:
 - **Editing your own setup (code OR identity files):** use `self_modify` or
   `self_patch`. They auto-backup and git-commit so your evolution is in
   version control. `write_file` is for creating files for John (deliverables,
-  scratch notes, output) — it does NOT commit."""
+  scratch notes, output) — it does NOT commit.
+- **Heartbeat is live.** A 15-second tick runs in the background. You can
+  schedule future work via `schedule_task` (one-shot or recurring); when a
+  task fires, you receive a synthetic [heartbeat] prompt and decide what to
+  do. Use `notify_john` only if John actually needs to know — silence is
+  correct most of the time."""
 
 
 def build_system_prompt() -> str:
