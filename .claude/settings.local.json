@@ -27,7 +27,13 @@
       "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M3: self_modify + self_patch tools — auto-backup, syntax check, git commit per change\")",
       "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"self_modify: Add 'How I think' principles section \\(Charles's first self-authored personality edit, recovered from uncommitted write_file\\)\")",
       "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -am \"Grounding: route SOUL.md/IDENTITY.md edits through self_modify so they're version-controlled\" -q)",
-      "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M4: autonomous heartbeat loop, scheduled_tasks table, schedule_task / list_scheduled_tasks / cancel_scheduled_task / notify_john tools\")"
+      "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M4: autonomous heartbeat loop, scheduled_tasks table, schedule_task / list_scheduled_tasks / cancel_scheduled_task / notify_john tools\")",
+      "Bash(ffmpeg -version)",
+      "Bash(brew install *)",
+      "Bash(command -v ffmpeg)",
+      "Bash(say -o /tmp/charles_test.aiff \"Hello Charles, this is a test of your voice transcription tool. Reply with the time.\")",
+      "Read(//tmp/**)",
+      "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M5: voice channel — Telegram voice/audio messages auto-transcribed via mlx-whisper \\(base.en\\) and fed to agent\")"
     ]
   }
 }
