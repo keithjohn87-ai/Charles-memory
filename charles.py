@@ -1,4 +1,4 @@
-"""Charles entrypoint. M0: starts the Telegram channel and blocks."""
+"""Charles entrypoint. Foundation as of M3 (self-modify capability online). Wakes Telegram channel."""
 from channels.telegram import run
 
 if __name__ == "__main__":
