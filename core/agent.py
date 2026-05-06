@@ -14,7 +14,7 @@ import tools  # noqa: F401  — import side-effect: registers all tools
 from core import memory
 from core.inference import complete
 from core.prompts import build_system_prompt
-from core.tools import dispatch, select_tools
+from core.tools import REGISTRY, dispatch  # select_tools still in core.tools, kept for future
 
 log = logging.getLogger("charles.agent")
 
@@ -36,15 +36,19 @@ def respond(message: str, conversation_id: str | None = None) -> str:
     if conversation_id:
         memory.log_turn(conversation_id, "user", message)
 
-    selected = select_tools(message)
-    api_tools = [t.openai_schema() for t in selected] if selected else None
+    # Send all registered tool schemas every turn. Total schema cost at M2 is
+    # ~200 tokens — worth it to eliminate the "tool present but not loaded"
+    # failure mode where the model narrates a call as text instead of emitting
+    # a real tool_call. When the toolset grows past ~10, reintroduce
+    # select_tools gating.
+    api_tools = [t.openai_schema() for t in REGISTRY.values()] or None
 
     total_chars = sum(len(m.get("content") or "") for m in history)
     log.info(
         "respond start: prompt_chars=%d turns_in_prompt=%d tools=%s",
         total_chars,
         len(history) - 1,
-        [t.name for t in selected] or "none",
+        [t.name for t in REGISTRY.values()],
     )
 
     final_text = ""
@@ -61,21 +65,24 @@ def respond(message: str, conversation_id: str | None = None) -> str:
             final_text = text
             break
 
+        tool_calls_payload = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            for tc in msg.tool_calls
+        ]
         history.append({
             "role": "assistant",
             "content": msg.content or "",
-            "tool_calls": [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in msg.tool_calls
-            ],
+            "tool_calls": tool_calls_payload,
         })
+        if conversation_id:
+            memory.log_assistant_tool_calls(conversation_id, msg.content or "", tool_calls_payload)
 
         for tc in msg.tool_calls:
             result = dispatch(tc.function.name, tc.function.arguments)
@@ -90,6 +97,8 @@ def respond(message: str, conversation_id: str | None = None) -> str:
                 "tool_call_id": tc.id,
                 "content": result,
             })
+            if conversation_id:
+                memory.log_tool_result(conversation_id, tc.id, result)
     else:
         final_text = text or "(max tool rounds reached)"
 

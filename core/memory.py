@@ -17,6 +17,7 @@ Memory is QUERIED into prompts on demand, never dumped wholesale.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from contextlib import contextmanager
@@ -25,6 +26,10 @@ from pathlib import Path
 from typing import Iterator
 
 from config import WORKSPACE
+
+# Tool results in history get truncated to this size — full result still goes
+# to the live turn that generated it; this is just for replay.
+TOOL_RESULT_LOG_CAP = 2000
 
 DB_PATH = WORKSPACE / "memory.db"
 
@@ -37,6 +42,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     conversation_id TEXT    NOT NULL,
     role            TEXT    NOT NULL,
     content         TEXT    NOT NULL,
+    tool_calls_json TEXT,
+    tool_call_id    TEXT,
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_cid ON conversations(conversation_id, id);
@@ -75,13 +82,19 @@ def _conn() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with _conn() as c:
         c.executescript(_SCHEMA)
+        # Forward-only migrations for already-existing DBs
+        cols = {row["name"] for row in c.execute("PRAGMA table_info(conversations)")}
+        if "tool_calls_json" not in cols:
+            c.execute("ALTER TABLE conversations ADD COLUMN tool_calls_json TEXT")
+        if "tool_call_id" not in cols:
+            c.execute("ALTER TABLE conversations ADD COLUMN tool_call_id TEXT")
 
 
 # ---------------- Conversations ----------------
 
 
 def log_turn(conversation_id: str, role: str, content: str) -> None:
-    """Persist one user/assistant message to the conversation log + daily log."""
+    """Persist a user or final-assistant message (no tool calls)."""
     if not content.strip():
         return
     with _conn() as c:
@@ -95,22 +108,60 @@ def log_turn(conversation_id: str, role: str, content: str) -> None:
         )
 
 
-def recent_history(conversation_id: str, max_chars: int = 4000, max_turns: int = 50) -> list[dict]:
-    """Return the most recent turns (oldest first), trimmed to a char budget."""
+def log_assistant_tool_calls(
+    conversation_id: str, content: str, tool_calls: list[dict]
+) -> None:
+    """Persist an assistant turn that emitted tool_calls (may have empty content)."""
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO conversations (conversation_id, role, content, tool_calls_json) "
+            "VALUES (?, 'assistant', ?, ?)",
+            (conversation_id, content or "", json.dumps(tool_calls)),
+        )
+
+
+def log_tool_result(conversation_id: str, tool_call_id: str, content: str) -> None:
+    """Persist a tool result in conversation history (truncated for replay)."""
+    truncated = content
+    if len(content) > TOOL_RESULT_LOG_CAP:
+        truncated = (
+            content[:TOOL_RESULT_LOG_CAP]
+            + f"\n...[+{len(content) - TOOL_RESULT_LOG_CAP} chars truncated]"
+        )
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO conversations (conversation_id, role, content, tool_call_id) "
+            "VALUES (?, 'tool', ?, ?)",
+            (conversation_id, truncated, tool_call_id),
+        )
+
+
+def recent_history(conversation_id: str, max_chars: int = 4000, max_turns: int = 100) -> list[dict]:
+    """Return recent turns (oldest first), trimmed to a char budget.
+
+    Reconstructs full OpenAI format including tool_calls and role=tool rows
+    so the model sees the actual cause-effect of past tool use.
+    """
     with _conn() as c:
         rows = c.execute(
-            "SELECT role, content FROM conversations "
-            "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT role, content, tool_calls_json, tool_call_id "
+            "FROM conversations WHERE conversation_id = ? "
+            "ORDER BY id DESC LIMIT ?",
             (conversation_id, max_turns),
         ).fetchall()
 
     out: list[dict] = []
     total = 0
     for r in rows:  # newest first
-        size = len(r["content"])
+        size = len(r["content"]) + (len(r["tool_calls_json"]) if r["tool_calls_json"] else 0)
         if total + size > max_chars:
             break
-        out.append({"role": r["role"], "content": r["content"]})
+        msg: dict = {"role": r["role"], "content": r["content"]}
+        if r["tool_calls_json"]:
+            msg["tool_calls"] = json.loads(r["tool_calls_json"])
+        if r["tool_call_id"]:
+            msg["tool_call_id"] = r["tool_call_id"]
+        out.append(msg)
         total += size
     out.reverse()
     return out

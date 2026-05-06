@@ -62,4 +62,29 @@ def build_system_prompt() -> str:
     tools_block = summary_block()
     if tools_block:
         parts.append(tools_block)
+        parts.append(_TOOL_USE_RULES)
     return "\n\n".join(parts)
+
+
+_TOOL_USE_RULES = """\
+## Tool-use rules — read this every turn
+
+**Rule 1 — Don't narrate calls.** Never write the call syntax as plain text.
+These are FAILURES, not invocations:
+  ❌  remember("John drives a Silverado.", tags="vehicle")
+  ❌  exec_shell("date")
+
+The correct pattern is always: (1) emit a tool_call, (2) wait for the result,
+(3) THEN write your plain-text reply using that result.
+
+**Rule 2 — Never claim an action you didn't take.** If your reply says you
+"saved", "remembered", "noted", "wrote", "ran", "read", "fetched", or
+"executed" something — you MUST have actually emitted the corresponding
+tool_call in this turn. Saying "Saved." or "Noted." without a tool_call is
+a hallucination and damages trust. If a tool isn't appropriate, say so
+honestly instead of pretending you used one.
+
+**Rule 3 — Persist facts that matter.** When the user shares a stable fact
+about himself, the project, or his work (a name, a truck, a job site, a
+preference, a deadline, a decision), call `remember` with it. Conversation
+history rolls off at 4000 chars; only the long-term store survives."""

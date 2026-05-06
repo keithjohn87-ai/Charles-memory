@@ -22,7 +22,8 @@
       "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M1: normalize curly quotes \\(iOS smart-quote substitution\\) in classifier\")",
       "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M1: add grounding block \\(root path, source layout, workspace\\) to system prompt\")",
       "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"Identity: seed SOUL.md, IDENTITY.md, USER.md, TOOLS.md from OpenClaw workspace, adapted for Python+MLX+macOS\")",
-      "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M2: SQLite-backed memory — conversation history, long-term facts, daily log; remember/recall tools\")"
+      "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M2: SQLite-backed memory — conversation history, long-term facts, daily log; remember/recall tools\")",
+      "Bash(git -c user.name=\"Charles\" -c user.email=\"charles@local\" commit -q -m \"M2 fix: send all tool schemas, persist tool_calls+results in history, harden anti-narration prompt rules\")"
     ]
   }
 }
