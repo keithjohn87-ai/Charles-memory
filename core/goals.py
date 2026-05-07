@@ -43,7 +43,10 @@ def init_schema() -> None:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%fZ")
+    # SQLite's strftime('%f') produces SS.SSS (seconds.milliseconds). Python's
+    # strftime('%f') produces microseconds only (6 digits, no seconds prefix).
+    # We must match SQLite's format so julianday() comparisons work correctly.
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def add_goal(description: str, advance_seconds: int = 300) -> dict:

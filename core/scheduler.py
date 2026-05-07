@@ -37,7 +37,9 @@ def init_schema() -> None:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%fZ")
+    # Match SQLite's strftime('%f') format (SS.SSS). See core/goals.py for the
+    # full explanation of why Python's %f is wrong here.
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def schedule(
@@ -52,7 +54,7 @@ def schedule(
         raise ValueError("provide exactly one of in_seconds or at_iso")
     if in_seconds is not None:
         due = datetime.now(timezone.utc) + timedelta(seconds=float(in_seconds))
-        due_at = due.strftime("%Y-%m-%dT%H:%M:%fZ")
+        due_at = due.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     else:
         # Accept naive ISO; assume UTC if no offset
         due_at = at_iso  # type: ignore[assignment]
@@ -93,7 +95,7 @@ def mark_done(task_id: int, result: str, cadence_seconds: int | None) -> None:
         if cadence_seconds:
             new_due = (
                 datetime.now(timezone.utc) + timedelta(seconds=cadence_seconds)
-            ).strftime("%Y-%m-%dT%H:%M:%fZ")
+            ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             c.execute(
                 "UPDATE scheduled_tasks SET status='pending', due_at=?, last_result=? WHERE id=?",
                 (new_due, result[:2000], task_id),
