@@ -25,3 +25,5 @@ CHARLES-CLAUDE-CODE-PROMPT.md
 MAC_MIGRATION_CHECKLIST.md
 openclaw_install.txt
 models/
+workspace/google_oauth_client.json
+workspace/gmail_token.json
