@@ -53,6 +53,32 @@ async def _fire_due_tasks() -> None:
             scheduler.mark_failed(task["id"], result)
 
 
+_NARRATION_PHRASES = (
+    "let me", "i'll", "i will", "i need to", "i'm going to",
+    "going to write", "going to create", "going to start",
+    "now i need", "now i'll", "writing the", "creating the",
+)
+
+
+def _count_narration_loop(notes: str) -> int:
+    """Count how many recent notes look like 'I'll do X' without action.
+
+    Only checks notes from the LAST 6 entries — older history doesn't matter.
+    Used to detect when Charles is stuck saying 'let me write the file' over
+    and over without ever calling write_file.
+    """
+    if not notes:
+        return 0
+    lines = [ln for ln in notes.split("\n") if ln.strip().startswith("[")]
+    recent = lines[-6:]
+    count = 0
+    for line in recent:
+        lower = line.lower()
+        if any(phrase in lower for phrase in _NARRATION_PHRASES):
+            count += 1
+    return count
+
+
 async def _advance_one_goal() -> None:
     ripe = goals.ripe_goals(limit=1)
     if not ripe:
@@ -60,18 +86,45 @@ async def _advance_one_goal() -> None:
     goal = ripe[0]
     log.info("tick: advancing goal #%d (%s)", goal["id"], goal["description"][:60])
     notes_block = goal["notes"] or "(no notes yet — this is the first advance)"
-    prompt = (
+    narration_count = _count_narration_loop(goal["notes"] or "")
+
+    base_prompt = (
         f"[goal advance #{goal['id']}] {goal['description']}\n\n"
         f"## Progress so far\n{notes_block}\n\n"
         f"## Your job this tick\n"
-        f"Take ONE concrete step toward this goal right now: read a file, write a file, "
-        f"schedule a subtask, save a fact, anything actionable. Your final plain-text reply "
-        f"will be AUTO-LOGGED as the next progress note for this goal — so write it as ONE "
-        f"sentence describing what you did this tick and what the next concrete step is. "
-        f"If the goal is fully complete, call `complete_goal(goal_id={goal['id']}, summary=...)` "
-        f"instead. Do NOT call notify_john unless the goal actually finished — silent ticks "
-        f"are correct."
     )
+
+    if narration_count >= 3:
+        # Charles is stuck saying "let me X" without doing X. Force the issue.
+        log.warning("goal #%d narration loop detected (count=%d) — injecting strong-action prompt",
+                    goal["id"], narration_count)
+        action_prompt = (
+            f"⚠️ NARRATION LOOP DETECTED: your last {narration_count} notes are all "
+            f"'I'll do X' or 'let me write Y' WITHOUT actually doing it. This is the "
+            f"failure mode John warned about. THREE OPTIONS — pick one this tick:\n"
+            f"  1. ACTUALLY DO IT NOW: call write_file/exec_shell/etc with the real content. "
+            f"     If you have the content in your head, write it. If you don't, you're not "
+            f"     ready to write — go to option 2 or 3.\n"
+            f"  2. RESEARCH FIRST: call search_web, browse_url, or read_file ONCE, then "
+            f"     summarize what you found in your final reply. NO 'let me' / 'I'll' phrases.\n"
+            f"  3. CANCEL THE GOAL: call cancel_goal(goal_id={goal['id']}) — you don't have "
+            f"     the runway for it right now.\n"
+            f"Words like 'let me', 'I will', 'writing the', 'going to' are FORBIDDEN in your "
+            f"reply this tick. Past-tense only ('I wrote', 'I read', 'I found') OR direct "
+            f"action verbs in tool_calls. No more declarations of intent."
+        )
+    else:
+        action_prompt = (
+            f"Take ONE concrete step toward this goal right now: read a file, write a file, "
+            f"schedule a subtask, save a fact, anything actionable. Your final plain-text reply "
+            f"will be AUTO-LOGGED as the next progress note for this goal — so write it as ONE "
+            f"sentence describing what you DID this tick (past tense) and what the next concrete "
+            f"step is. If the goal is fully complete, call `complete_goal(goal_id={goal['id']}, "
+            f"summary=...)` instead. Do NOT call notify_john unless the goal actually finished — "
+            f"silent ticks are correct."
+        )
+
+    prompt = base_prompt + action_prompt
     goals.mark_advanced(goal["id"])  # mark before running so a slow run doesn't double-fire
     ok, reply = await _run_blocking(prompt, f"goal:{goal['id']}")
 
