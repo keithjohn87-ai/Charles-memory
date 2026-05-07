@@ -53,7 +53,9 @@ def respond(message: str, conversation_id: str | None = None) -> str:
 
     final_text = ""
     for round_n in range(MAX_TOOL_ROUNDS):
-        text, msg, usage = complete(history, tools=api_tools, max_tokens=800)
+        # max_tokens=4000: tool_call args can carry long write_file content
+        # (e.g., a multi-page analysis). 800 was truncating Charles mid-write.
+        text, msg, usage = complete(history, tools=api_tools, max_tokens=4000)
         log.info(
             "round=%d usage=%s tool_calls=%d",
             round_n,
