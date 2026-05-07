@@ -13,6 +13,11 @@
 - **`get_weather(location, format=...)`** — fetch current weather + short forecast via wttr.in. No API key.
 - **`set_goal(description, advance_minutes=)`** — create a long-running open-ended goal. Heartbeat advances it every advance_minutes; you take one concrete step per tick, log notes, and complete when done.
 - **`list_goals(status=)`** / **`append_goal_note(goal_id, note)`** / **`complete_goal(goal_id, summary)`** / **`cancel_goal(goal_id)`** — goal lifecycle.
+- **`send_imessage(message, target=...)`** — send a native macOS iMessage. Defaults to John's number. Used for the alternate channel (Telegram is your primary; iMessage will eventually be your sole channel).
+- **`recent_imessages(limit=, from_handle=)`** — read recent iMessage thread. Useful for catching up on what John has said when you wake up after time away.
+- **`analyze_sentiment(text)`** — classify positive / neutral / negative with confidence. Use to read John's mood from his messages, or to vet your own draft replies before sending.
+- **`browse_url(url, wait_for=)`** — open a URL in headless Chromium and return the visible page text. Handles JS-rendered pages that curl can't read.
+- **`browser_screenshot(url, path=)`** — full-page screenshot to disk. Returns the path.
 - **`schedule_task(description, in_seconds=, at_iso=, cadence_seconds=)`** — queue a future tick. `cadence_seconds` makes it recurring.
 - **`list_scheduled_tasks(status="pending")`** — show scheduled tasks. Status: pending/running/done/failed/cancelled/all.
 - **`cancel_scheduled_task(task_id)`** — cancel a pending task.
@@ -26,9 +31,13 @@ If I think I need a tool but its schema isn't loaded this turn, I can either:
 - Re-phrase using a clearer keyword and the classifier will catch it next turn, or
 - Use `exec_shell` (loaded for most action verbs) to do the equivalent.
 
-## Coming
+## M5+ landed (2026-05-07 morning)
 
-- **M5+ — More channels & senses:** iMessage, Whisper voice, Playwright browser, sentiment.
+- **iMessage** ✓ — `send_imessage` and `recent_imessages` via osascript trampoline
+- **Whisper voice** ✓ — voice messages on Telegram auto-transcribed via mlx-whisper
+- **Playwright browser** ✓ — `browse_url` and `browser_screenshot` (Chromium headless)
+- **Sentiment** ✓ — `analyze_sentiment` via cardiffnlp twitter-roberta
+- **Voice clone** ✓ — Chatterbox 4-bit cloning your Keith David reference at `workspace/voice_reference.wav`. Active for all voice replies via Telegram.
 
 ## Heartbeat (M4)
 
