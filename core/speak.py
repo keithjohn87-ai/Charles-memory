@@ -23,7 +23,7 @@ from pathlib import Path
 
 log = logging.getLogger("charles.speak")
 
-DEFAULT_VOICE = os.environ.get("CHARLES_VOICE", "am_onyx")
+DEFAULT_VOICE = os.environ.get("CHARLES_VOICE", "am_fenrir")
 KOKORO_MODEL = os.environ.get("CHARLES_KOKORO_MODEL", "prince-canuma/Kokoro-82M")
 SPEAK_RATE = float(os.environ.get("CHARLES_SPEAK_RATE", "1.0"))  # speed multiplier for Kokoro
 
