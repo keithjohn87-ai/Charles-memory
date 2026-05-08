@@ -1,14 +1,25 @@
 """System prompt builder.
 
-Three layers, in order:
-  1. Identity   — from SOUL.md / IDENTITY.md if present, else a lean default.
-                  This is the persona/charter layer; user-editable.
-  2. Grounding  — machine-truth facts: where Charles lives on disk, his
-                  source layout, his workspace. Always injected so Charles
-                  can navigate his own code without guessing.
-  3. Tools      — one-line summary per registered tool.
+Five layers, in order:
+  1. Identity        — SOUL.md (incl. Jarvis-direction section) + IDENTITY.md.
+                       Persona / charter / character. User-editable.
+  2. Grounding       — machine-truth facts: where Charles lives on disk, his
+                       source layout, his workspace, John's home directories.
+                       Always injected so Charles can navigate without guessing.
+  3. Response-style  — workspace/response-style.md. Conversational doctrine
+                       distilled from the human-nuance corpus (read meaning
+                       not words, match register, no padding, etc.).
+  4. Decision-rules  — workspace/decision-rules.md. Action heuristics from
+                       the systems / cognitive-bias corpus (first principles,
+                       reversible-vs-irreversible, high-leverage, etc.).
+  5. Tools           — one-line summary per registered tool + tool-use rules.
 
-Target: <600 tokens base. Print the count when in doubt.
+Current size: ~5500 tokens. Original target was <600; deliberately relaxed
+2026-05-07 evening because (a) MLX caches 99%+ of the prefix across turns so
+warm latency is unchanged, (b) the persona substrate compounds the model's
+theory-of-mind reliability (Sunday Tests 2-4). Cold-start prompt eval costs
+~30-55 sec one-time per process restart. Don't trim without measuring against
+the Sunday Test bar.
 """
 from __future__ import annotations
 
@@ -41,6 +52,13 @@ def _grounding() -> str:
     channels/telegram.py  (Telegram channel — owner-only)
 - Your writable workspace is {WORKSPACE}/. Your editable identity files are
   {WORKSPACE}/SOUL.md and {WORKSPACE}/IDENTITY.md.
+- **John's files live OUTSIDE your workspace.** His Mac home is `/Users/home/`.
+  Common spots when he says "find X":
+    /Users/home/Desktop/Charles URLS/  (curated training data — Business URLs, Initial training data, 30Day plan PDF)
+    /Users/home/Documents/
+    /Users/home/Downloads/
+  When he says "the file on the desktop", that's `/Users/home/Desktop/`,
+  not your workspace.
 - **Editing your own setup (code OR identity files):** use `self_modify` or
   `self_patch`. They auto-backup and git-commit so your evolution is in
   version control. `write_file` is for creating files for John (deliverables,
@@ -65,11 +83,15 @@ def _read_or_empty(path) -> str:
 
 
 def build_system_prompt() -> str:
-    # Auto-load: SOUL.md (character) + IDENTITY.md (vibe). These together stay <600 tokens.
+    # Auto-load: SOUL.md (character) + IDENTITY.md (vibe) + response-style.md
+    # (conversational doctrine) + decision-rules.md (action heuristics). These
+    # together stay <2500 tokens.
     # NOT auto-loaded (Charles reads on first-turn-after-restart per AGENTS.md instruction):
-    # AGENTS.md, USER.md, TOOLS.md, MASTER_OPERATING_MANUAL.md.
+    # AGENTS.md, USER.md, TOOLS.md, MASTER_OPERATING_MANUAL.md, KNOWLEDGE_BASE.md.
     soul = _read_or_empty(WORKSPACE / "SOUL.md")
     identity = _read_or_empty(WORKSPACE / "IDENTITY.md")
+    response_style = _read_or_empty(WORKSPACE / "response-style.md")
+    decision_rules = _read_or_empty(WORKSPACE / "decision-rules.md")
 
     if soul and identity:
         persona = f"{soul}\n\n{identity}"
@@ -81,6 +103,10 @@ def build_system_prompt() -> str:
         persona = _DEFAULT_IDENTITY
 
     parts = [persona, _grounding()]
+    if response_style:
+        parts.append(response_style)
+    if decision_rules:
+        parts.append(decision_rules)
     tools_block = summary_block()
     if tools_block:
         parts.append(tools_block)
@@ -131,4 +157,13 @@ user message is >1000 chars and looks like structured content (a manual,
 a plan, a list, an article, code), the FIRST thing you do is save it with
 `write_file` to `workspace/` with a sensible name. THEN discuss it.
 Acknowledging without saving means the document only lives in conversation
-history, which rolls off — and you will not have it later when you need it."""
+history, which rolls off — and you will not have it later when you need it.
+
+**Rule 6 — When stuck, ASK. Don't dig silently.** John works 70-hour weeks
+and is not reading your tool calls. If you've made 3+ failed search/find
+attempts on the same question, STOP and send him one short `notify_john`
+message asking where to look or what he meant. Same rule for
+account/payment/setup blockers in autonomous-cashflow work: don't guess
+what credentials/accounts he has — ask. Silence past 60 seconds on a
+direct question is a failure; a 1-line "still working on X, ETA ~5 min"
+update is the floor."""
