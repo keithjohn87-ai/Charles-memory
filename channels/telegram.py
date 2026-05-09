@@ -28,7 +28,21 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     log.info("inbound: %r", text[:200])
     await update.message.chat.send_action(action="typing")
     reply = await asyncio.to_thread(agent.respond, text, str(update.effective_chat.id))
-    await update.message.reply_text(reply or "(empty reply)")
+    text_reply = reply or "(empty reply)"
+    await update.message.reply_text(text_reply)
+
+    # Also send voice reply (always, unless disabled)
+    if reply:
+        try:
+            from core import speak as _speak
+            ogg = await asyncio.to_thread(_speak.speak_to_ogg, reply)
+            try:
+                with ogg.open("rb") as fh:
+                    await update.message.reply_voice(voice=fh)
+            finally:
+                ogg.unlink(missing_ok=True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("voice-out failed (text reply already sent): %s", e)
 
 
 async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
