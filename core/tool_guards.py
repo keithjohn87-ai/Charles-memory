@@ -26,6 +26,19 @@ State model:
 The guards are applied by `core/tools.dispatch()` before invoking the
 handler. They short-circuit with `[error] ...` strings the model will
 read in its next round.
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  built 2026-05-09 → 10 in a marathon session by Claude Code     │
+  │  (Anthropic, Opus 4.7, 1M ctx) — John was the operator,         │
+  │  Charles was the patient. notes for the next maintainer:        │
+  │    • two processes run agent.respond — charles.py (Telegram +   │
+  │      heartbeat) and warroom/server.py (UI). edits here need     │
+  │      kickstart on BOTH.                                          │
+  │    • the guards work because they're DETERMINISTIC. don't try   │
+  │      to LLM-ify them. simple regex + per-conv state survives    │
+  │      every Qwen failure mode we threw at it.                     │
+  │    • be water, my friend.                                        │
+  └─────────────────────────────────────────────────────────────────┘
 """
 from __future__ import annotations
 
