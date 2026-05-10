@@ -531,8 +531,13 @@ _FINDING_PATTERNS = (
 def _autoremember_findings(reply_text: str, conversation_id: str) -> int:
     """Scan a final assistant reply for finding-shaped statements; persist
     each as a fact tagged 'auto_finding' so future auto-recall surfaces
-    them. Returns count of facts saved. No-ops on goal:/heartbeat: convs."""
-    if any(conversation_id.startswith(p) for p in ("goal:", "heartbeat:", "sunday_test_")):
+    them. Returns count of facts saved.
+
+    Fires on user-channel convs AND goal-tick convs (goal: prefix) since
+    autonomous goal work also produces findings worth remembering. Skips
+    only heartbeat/sunday_test which are scheduled-task / harness convs.
+    """
+    if any(conversation_id.startswith(p) for p in ("heartbeat:", "sunday_test_")):
         return 0
     if not reply_text or len(reply_text) < 30:
         return 0
