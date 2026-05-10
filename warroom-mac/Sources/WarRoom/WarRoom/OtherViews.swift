@@ -4,8 +4,21 @@
 // they grow.
 
 import SwiftUI
-import AppKit
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
+// Cross-platform clipboard read — UIPasteboard on iOS, NSPasteboard on macOS.
+fileprivate func clipboardString() -> String? {
+    #if os(macOS)
+    return NSPasteboard.general.string(forType: .string)
+    #else
+    return UIPasteboard.general.string
+    #endif
+}
 
 // MARK: - Activity
 
@@ -292,6 +305,8 @@ struct SettingsView: View {
     @State private var secret: String = ""
     @State private var saved = false
     @State private var loadStatus: String = ""
+    @State private var testStatus: String = ""
+    @State private var testing = false
 
     // Local-server case: read the secret directly from the Mac filesystem so
     // the user never has to fight macOS's Strong Password autofill on the field.
@@ -310,6 +325,7 @@ struct SettingsView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
                 HStack(spacing: 8) {
+                    #if os(macOS)
                     Button("Load from secret file…") {
                         let panel = NSOpenPanel()
                         panel.title = "Pick warroom_secret.txt"
@@ -324,8 +340,9 @@ struct SettingsView: View {
                         }
                     }
                     .help("Opens a file picker — point at workspace/warroom_secret.txt. Sandbox-safe (uses user-selected file entitlement).")
+                    #endif
                     Button("Paste from clipboard") {
-                        if let pasted = NSPasteboard.general.string(forType: .string) {
+                        if let pasted = clipboardString() {
                             secret = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
                             loadStatus = "Pasted \(secret.count) chars."
                         }
@@ -342,23 +359,57 @@ struct SettingsView: View {
             }
             HStack {
                 Button("Save") {
-                    config.serverURL = URL(string: url) ?? config.serverURL
-                    config.sharedSecret = secret
+                    config.serverURL = URL(string: url.trimmingCharacters(in: .whitespacesAndNewlines)) ?? config.serverURL
+                    config.sharedSecret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
                     config.save()
                     saved = true
+                    testStatus = ""
                 }
                 if saved {
                     Text("Saved.").foregroundStyle(Color.bronzeBrass).font(.caption)
                 }
+                Spacer()
+                Button(testing ? "Testing…" : "Test connection") {
+                    Task { await runTest() }
+                }
+                .disabled(testing)
+            }
+            if !testStatus.isEmpty {
+                Text(testStatus)
+                    .font(.caption)
+                    .foregroundStyle(testStatus.hasPrefix("OK") ? Color.bronzeBrass : Color.bronzeError)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
             }
         }
         .padding()
+        #if os(macOS)
         .frame(width: 480)
+        #endif
         .onAppear {
             url = config.serverURL.absoluteString
             secret = config.sharedSecret
         }
         .bronzeTheme()
+    }
+
+    /// Fire a single /api/state/now request against the saved config and show
+    /// the result inline. Works on both platforms — surfaces the actual error
+    /// when polling silently fails (e.g. wrong URL, wrong secret, network).
+    private func runTest() async {
+        testing = true
+        testStatus = ""
+        // Use the SAVED config (not the textfield values) so we test what
+        // polling will actually hit.
+        let usedURL = config.serverURL.absoluteString
+        let secretLen = config.sharedSecret.count
+        do {
+            let s = try await CharlesAPI.shared.now()
+            testStatus = "OK — \(usedURL) (secret \(secretLen) chars). agentRunning=\(s.agentRunning), pending=\(s.pendingApprovalsCount), goals=\(s.activeGoals.count)"
+        } catch {
+            testStatus = "Error: \(error.localizedDescription)\nUsing: \(usedURL) (secret \(secretLen) chars)"
+        }
+        testing = false
     }
 }
 
@@ -447,7 +498,7 @@ struct SecretsView: View {
                 }
                 .help("Toggle value visibility")
                 Button("Paste") {
-                    if let s = NSPasteboard.general.string(forType: .string) {
+                    if let s = clipboardString() {
                         newValue = s.trimmingCharacters(in: .whitespacesAndNewlines)
                     }
                 }

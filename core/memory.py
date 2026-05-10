@@ -51,11 +51,16 @@ CREATE INDEX IF NOT EXISTS idx_conversations_cid ON conversations(conversation_i
 CREATE TABLE IF NOT EXISTS long_term_facts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     fact         TEXT    NOT NULL,
-    tags         TEXT    NOT NULL DEFAULT '',
+    tags         TEXT    NOT NULL DEFAULT '',           -- secondary index (legacy + john-vocab tags)
     created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    last_used_at TEXT
+    last_used_at TEXT,
+    topic        TEXT,                                  -- single primary topic (learning-tree axis)
+    source       TEXT,                                  -- where this fact came from (URL / conv_id / tool result)
+    confidence   REAL    DEFAULT 1.0,                   -- 0..1, how sure Charles is
+    embedding    BLOB                                   -- packed float32 vector from MiniLM (384 dims)
 );
-CREATE INDEX IF NOT EXISTS idx_facts_tags ON long_term_facts(tags);
+CREATE INDEX IF NOT EXISTS idx_facts_tags  ON long_term_facts(tags);
+CREATE INDEX IF NOT EXISTS idx_facts_topic ON long_term_facts(topic);
 
 CREATE TABLE IF NOT EXISTS daily_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -353,14 +358,38 @@ def reset_conversation(conversation_id: str, keep_last_user_turn: bool = True) -
 # ---------------- Long-term facts ----------------
 
 
-def add_fact(fact: str, tags: str = "") -> int:
+def add_fact(
+    fact: str,
+    tags: str = "",
+    topic: str | None = None,
+    source: str | None = None,
+    confidence: float = 1.0,
+) -> int:
+    """Save a fact. Embeds it once (via core.embeddings) so semantic recall
+    works immediately. If topic is None, defaults to the first tag (legacy
+    behavior for code paths that haven't been updated yet)."""
     fact = fact.strip()
     if not fact:
         raise ValueError("empty fact")
+    # Topic defaults to first tag if not supplied — back-compat for callers
+    # that still pass only tags.
+    if topic is None:
+        first_tag = (tags.split(",") or [""])[0].strip()
+        topic = first_tag or None
+    # Embed inline. Failure (e.g. model not yet loaded) shouldn't block the
+    # save — fall through with embedding=None and the next migration sweep
+    # can backfill.
+    embedding_bytes: bytes | None = None
+    try:
+        from core import embeddings as _embed
+        embedding_bytes = _embed.encode(fact)
+    except Exception as e:  # noqa: BLE001
+        log.warning("embedding failed for new fact (saving without): %s", e)
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO long_term_facts (fact, tags) VALUES (?, ?)",
-            (fact, tags.strip()),
+            "INSERT INTO long_term_facts (fact, tags, topic, source, confidence, embedding) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (fact, tags.strip(), topic, source, float(confidence), embedding_bytes),
         )
         c.execute(
             "INSERT INTO daily_log (kind, text) VALUES (?, ?)",
@@ -370,7 +399,10 @@ def add_fact(fact: str, tags: str = "") -> int:
 
 
 def search_facts(query: str, limit: int = 5) -> list[dict]:
-    """Substring search over fact text and tags. Newest first on ties."""
+    """LEGACY substring search over fact text and tags. Kept as fallback /
+    exact-string lookup. Prefer `semantic_search` for the relational recall
+    path — it does cosine similarity instead of LIKE match.
+    """
     q = f"%{query.strip()}%"
     with _conn() as c:
         rows = c.execute(
@@ -386,6 +418,102 @@ def search_facts(query: str, limit: int = 5) -> list[dict]:
                 f"WHERE id IN ({ids})"
             )
     return [dict(r) for r in rows]
+
+
+def semantic_search(
+    query: str,
+    limit: int = 5,
+    recency_weight: float = 0.10,
+    exclude_tags: tuple[str, ...] = (
+        "superseded", "intervention,auto", "prune,auto", "credential_scrub", "blocked_url",
+    ),
+) -> list[dict]:
+    """Semantic top-k retrieval. Embeds the query, cosine-compares to every
+    fact's stored embedding, optionally blends in a small recency bonus.
+
+    Returns dicts with id, fact, tags, topic, source, confidence, created_at,
+    and a `score` field (higher is better). Updates last_used_at on hits so
+    we can prune cold facts later.
+
+    `exclude_tags`: substrings to filter out from the candidate pool — these
+    are housekeeping rows that shouldn't surface in recall.
+    """
+    from core import embeddings as _embed
+    q = (query or "").strip()
+    if not q:
+        return []
+    qvec = _embed.unpack(_embed.encode(q))
+
+    with _conn() as c:
+        # Pull all facts with embeddings — at 1k rows this is cheap. Filter
+        # housekeeping rows out at SQL level rather than after retrieval so
+        # the top-k pool is clean.
+        clauses = ["embedding IS NOT NULL"]
+        params: list = []
+        for t in exclude_tags:
+            clauses.append("tags NOT LIKE ?")
+            params.append(f"%{t}%")
+        sql = (
+            "SELECT id, fact, tags, topic, source, confidence, created_at, last_used_at, embedding "
+            f"FROM long_term_facts WHERE {' AND '.join(clauses)}"
+        )
+        rows = c.execute(sql, params).fetchall()
+        if not rows:
+            return []
+
+        # Vectorized cosine
+        candidates = [(r["id"], r["embedding"]) for r in rows]
+        scored = _embed.topk_by_cosine(qvec, candidates, k=max(limit * 3, limit))
+
+        # Build a fast lookup
+        row_by_id = {r["id"]: r for r in rows}
+
+        # Optional small recency tweak — sort by score, but bump scores by a
+        # tiny amount based on how recent the fact is. Keeps fresh findings
+        # competitive with older topical hits without dominating.
+        import time
+        now_t = time.time()
+        adjusted: list[tuple[int, float]] = []
+        for fid, sim in scored:
+            row = row_by_id[fid]
+            recency_bonus = 0.0
+            if recency_weight > 0 and row["created_at"]:
+                # crude age bonus: facts in last 24h get up to +recency_weight,
+                # decaying to 0 over ~30 days
+                try:
+                    age_sec = now_t - datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp()
+                    days = age_sec / 86400.0
+                    decay = max(0.0, 1.0 - (days / 30.0))
+                    recency_bonus = recency_weight * decay
+                except Exception:  # noqa: BLE001
+                    pass
+            adjusted.append((fid, sim + recency_bonus))
+
+        adjusted.sort(key=lambda t: -t[1])
+        top = adjusted[:limit]
+
+        # Touch last_used_at for surfaced facts
+        if top:
+            ids = ",".join(str(fid) for fid, _ in top)
+            c.execute(
+                f"UPDATE long_term_facts SET last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                f"WHERE id IN ({ids})"
+            )
+
+        results: list[dict] = []
+        for fid, score in top:
+            r = row_by_id[fid]
+            results.append({
+                "id": r["id"],
+                "fact": r["fact"],
+                "tags": r["tags"],
+                "topic": r["topic"],
+                "source": r["source"],
+                "confidence": r["confidence"],
+                "created_at": r["created_at"],
+                "score": round(score, 4),
+            })
+        return results
 
 
 def all_facts(limit: int = 50) -> list[dict]:

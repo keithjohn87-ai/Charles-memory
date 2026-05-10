@@ -1,71 +1,31 @@
 // ConversationView.swift — chat pane. Pick a conversation from the list,
 // see turns, type a reply.
+//
+// Cross-platform (macOS + iOS). The composer is a SwiftUI TextEditor; submit
+// is wired via the Send button's `.keyboardShortcut(.return)` on macOS and
+// a tap on iOS. Earlier macOS-only NSTextView/SubmittingTextView path was
+// removed during the multiplatform conversion 2026-05-10 — the keyboard
+// shortcut covers the same UX without an AppKit dependency.
 
 import SwiftUI
-import AppKit
 
-// MARK: - Smart text editor — Enter sends, Shift+Enter inserts newline
+// MARK: - Cross-platform composer field
 
-struct ChatComposerField: NSViewRepresentable {
+struct ChatComposerField: View {
     @Binding var text: String
     var onSubmit: () -> Void
     var disabled: Bool = false
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.drawsBackground = true
-
-        let textView = SubmittingTextView()
-        textView.delegate = context.coordinator
-        textView.coordinator = context.coordinator
-        textView.isRichText = false
-        textView.isEditable = !disabled
-        textView.font = NSFont.systemFont(ofSize: 14)
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-        textView.autoresizingMask = [.width]
-        textView.allowsUndo = true
-        scroll.documentView = textView
-        return scroll
-    }
-
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let tv = scroll.documentView as? SubmittingTextView else { return }
-        if tv.string != text { tv.string = text }
-        tv.isEditable = !disabled
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onSubmit: onSubmit)
-    }
-
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var text: Binding<String>
-        let onSubmit: () -> Void
-
-        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
-            self.text = text
-            self.onSubmit = onSubmit
-        }
-
-        func textDidChange(_ notification: Notification) {
-            guard let tv = notification.object as? NSTextView else { return }
-            text.wrappedValue = tv.string
-        }
-    }
-}
-
-final class SubmittingTextView: NSTextView {
-    weak var coordinator: ChatComposerField.Coordinator?
-
-    override func keyDown(with event: NSEvent) {
-        // Enter alone = submit; Shift+Enter = newline (default)
-        if event.keyCode == 36 /* Return */ && !event.modifierFlags.contains(.shift) {
-            coordinator?.onSubmit()
-            return
-        }
-        super.keyDown(with: event)
+    var body: some View {
+        TextEditor(text: $text)
+            .font(.system(size: 14))
+            .scrollContentBackground(.hidden)
+            .background(Color.bronzeSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.bronzeDivider, lineWidth: 0.5)
+            )
+            .disabled(disabled)
     }
 }
 
@@ -78,6 +38,50 @@ struct ConversationView: View {
     @State private var error: String?
 
     var body: some View {
+        // HSplitView is macOS-only. On iOS, we collapse to a single-column
+        // layout that auto-selects JOHN_CHARLES — the relational thread is
+        // what the iPhone is FOR. CHARLES_LOG lives in the Activity tab,
+        // read-only, accessible via the tab bar there.
+        Group {
+            #if os(macOS)
+            macOSSplitLayout
+            #else
+            iOSStackLayout
+            #endif
+        }
+        .task { await loadConversations() }
+        .onChange(of: selectedConvId) { _, new in
+            if let id = new { Task { await loadTurns(id) } }
+        }
+        .task(id: selectedConvId) {
+            guard let id = selectedConvId else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if Task.isCancelled { break }
+                await loadTurns(id)
+            }
+        }
+        .navigationTitle("Conversation")
+        .toolbar {
+            ToolbarItem {
+                Button(action: {
+                    Task {
+                        await loadConversations()
+                        if let id = selectedConvId { await loadTurns(id) }
+                    }
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundStyle(Color.bronzeCopper)
+                }
+                .help("Refresh conversations + turns")
+            }
+        }
+        .bronzeTheme()
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var macOSSplitLayout: some View {
         HSplitView {
             // Left: list of conversations
             VStack(alignment: .leading, spacing: 0) {
@@ -169,38 +173,54 @@ struct ConversationView: View {
                 }
             }
         }
-        .task { await loadConversations() }
-        .onChange(of: selectedConvId) { _, new in
-            if let id = new { Task { await loadTurns(id) } }
-        }
-        // Auto-poll the selected conversation every 2 seconds so Charles's
-        // replies + progress ticker show up without a manual refresh.
-        // Restarts each time selectedConvId changes (the .task(id:) idiom).
-        .task(id: selectedConvId) {
-            guard let id = selectedConvId else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2s
-                if Task.isCancelled { break }
-                await loadTurns(id)
-            }
-        }
-        .navigationTitle("Conversation")
-        .toolbar {
-            ToolbarItem {
-                Button(action: {
-                    Task {
-                        await loadConversations()
-                        if let id = selectedConvId { await loadTurns(id) }
-                    }
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundStyle(Color.bronzeCopper)
-                }
-                .help("Refresh conversations + turns")
-            }
-        }
-        .bronzeTheme()
     }
+    #endif
+
+    #if !os(macOS)
+    /// iPhone layout: single-column. Auto-pin to JOHN_CHARLES; CHARLES_LOG
+    /// is reachable via the Activity tab in the main TabView.
+    @ViewBuilder
+    private var iOSStackLayout: some View {
+        VStack(spacing: 0) {
+            if let convId = selectedConvId {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(turns) { turn in
+                            TurnRow(turn: turn).id(turn.id)
+                        }
+                    }
+                    .padding()
+                }
+                // defaultScrollAnchor(.bottom) anchors the view at the bottom
+                // by default — so each polling reload of `turns` keeps the
+                // newest message in view instead of yanking the scroll
+                // position elsewhere. iOS 17+. Replaces the unstable
+                // ScrollViewReader + onChange(turns.count) combo, which on
+                // iOS reset to top whenever LazyVStack contents shifted.
+                .defaultScrollAnchor(.bottom)
+                Divider()
+                if convId == "charles_log" {
+                    HStack(spacing: 6) {
+                        Image(systemName: "ear")
+                            .foregroundStyle(Color.bronzeIvoryFaint)
+                        Text("Read-only — Boss Hog's log. Talk to him via iMessage.")
+                            .font(.callout)
+                            .foregroundStyle(Color.bronzeIvoryDim)
+                            .italic()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.bronzeSurface)
+                } else {
+                    composer(convId: convId)
+                }
+            } else {
+                ProgressView().padding()
+            }
+        }
+    }
+    #endif
 
     /// Human-readable label for a conversation_id. Two channels exist:
     /// - "8455750177" — John ↔ Charles (the relational thread)

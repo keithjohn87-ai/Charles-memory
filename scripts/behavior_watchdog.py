@@ -1191,8 +1191,29 @@ def _send_boss_hog_ack(text: str) -> bool:
         return False
 
 
+_JOHN_INBOX_PATH = WORKSPACE / "john_inbox.md"
+
+
+def _append_to_john_inbox(text: str) -> None:
+    """Append John's iMessage to the inbox file Claude Code reads at session
+    start. Append-only so historical context survives. The next Claude Code
+    session can `tail -100 ~/charles/workspace/john_inbox.md` to catch up
+    on anything John said while AFK.
+    """
+    try:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        line = f"[{ts}] {text.replace(chr(10), ' ')}\n"
+        with open(_JOHN_INBOX_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:  # noqa: BLE001
+        log.warning("john_inbox write failed: %s", e)
+
+
 def _log_boss_hog_exchange(john_text: str, ack_text: str) -> None:
-    """Log the inbound iMessage + ack into CHARLES_LOG so the UI shows it."""
+    """Log the inbound iMessage + ack into CHARLES_LOG so the UI shows it,
+    AND append the John message to john_inbox.md for the next Claude Code
+    session to read on startup."""
+    _append_to_john_inbox(john_text)
     try:
         with sqlite3.connect(str(DB_PATH)) as c:
             c.execute(

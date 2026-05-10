@@ -15,18 +15,26 @@ struct WarRoomApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(config)
+                #if os(macOS)
                 .frame(minWidth: 1000, minHeight: 600)
+                #endif
                 .preferredColorScheme(.dark)
                 .tint(Color.bronzeCopper)
         }
+        #if os(macOS)
         .windowStyle(.hiddenTitleBar)
+        #endif
 
+        #if os(macOS)
+        // macOS Settings scene — opens via Cmd+, on Mac. iOS doesn't have
+        // a system Settings scene; the in-app Settings/Tools tab covers it.
         Settings {
             SettingsView()
                 .environmentObject(config)
                 .preferredColorScheme(.dark)
                 .tint(Color.bronzeCopper)
         }
+        #endif
     }
 }
 
@@ -38,6 +46,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case system = "System"
     case tools = "Tools"
     case secrets = "Secrets"
+    case settings = "Settings"    // server URL + shared secret (iOS especially — no system Settings scene there)
 
     var id: String { rawValue }
 
@@ -50,12 +59,19 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .system: return "cpu"
         case .tools: return "wrench.and.screwdriver"
         case .secrets: return "key.fill"
+        case .settings: return "gearshape"
         }
     }
 }
 
 struct ContentView: View {
+    // Default tab: Tasks on macOS (existing behavior), Settings on iOS so the
+    // first launch lands directly on server URL + shared secret entry.
+    #if os(macOS)
     @State private var selection: SidebarItem? = .tasks
+    #else
+    @State private var selection: SidebarItem? = .settings
+    #endif
     @StateObject private var pollState = PollingState()
 
     var body: some View {
@@ -81,6 +97,7 @@ struct ContentView: View {
             case .system: SystemView()
             case .tools: ToolsView()
             case .secrets: SecretsView()
+            case .settings: SettingsView()
             }
         }
         .environmentObject(pollState)

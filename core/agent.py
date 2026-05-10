@@ -522,54 +522,38 @@ def _extract_keywords(text: str, max_kw: int = 5) -> list[str]:
 
 
 def _build_auto_recall_note(user_message: str) -> str:
-    """Search long_term_facts for keywords from the user's message and return
-    a system-note string with the top matches. Empty string if nothing
-    relevant was found.
+    """Semantic auto-recall: embed the user's message, return top facts by
+    cosine similarity. Replaces the prior keyword-only path (2026-05-10
+    rebuild — see project_charles_learning_tree.md). Cosine recall handles
+    vocabulary mismatch that the keyword approach kept missing.
 
-    Caps: 3 facts max, 200 chars per fact (was 5 facts × 300 chars). With
-    a 360+ fact store, the broader cap pulled 30K+ chars into the prompt
-    and bloated context — observed 39K total prompt size on simple "Good
-    Morning" greetings. Tightened to keep the recall block under ~1500 chars.
+    Caps: 3 facts max, 250 chars per fact, ~1500 chars total to avoid
+    prompt bloat. Empty string if nothing semantically matches.
     """
-    keywords = _extract_keywords(user_message)
-    if not keywords:
+    msg = (user_message or "").strip()
+    if not msg or len(msg) < 4:
         return ""
 
-    # Search facts for each keyword; collect top hits, dedup by id
-    seen_ids: set[int] = set()
-    hits: list[dict] = []
-    for kw in keywords:
-        try:
-            results = memory.search_facts(kw, limit=3)
-        except Exception:  # noqa: BLE001
-            continue
-        for r in results:
-            if r["id"] in seen_ids:
-                continue
-            seen_ids.add(r["id"])
-            # Skip noisy auto-generated facts that wouldn't help John
-            tags = (r.get("tags") or "").lower()
-            if any(t in tags for t in ("superseded", "intervention,auto", "prune,auto", "credential_scrub", "blocked_url")):
-                continue
-            hits.append(r)
-            if len(hits) >= 3:
-                break
-        if len(hits) >= 3:
-            break
+    try:
+        hits = memory.semantic_search(msg, limit=3)
+    except Exception as e:  # noqa: BLE001
+        log.warning("semantic_search failed; auto-recall disabled this turn: %s", e)
+        return ""
 
     if not hits:
         return ""
 
     lines = [
-        "## Relevant memory from past sessions (auto-recalled):",
-        "Search keywords: " + ", ".join(keywords),
+        "## Relevant memory from past sessions (semantic auto-recall):",
         "",
     ]
     for r in hits:
-        fact = (r["fact"] or "").strip()[:200]
-        tags = (r.get("tags") or "").strip()[:80]
+        fact = (r["fact"] or "").strip()[:250]
+        topic = (r.get("topic") or "").strip()
         when = (r.get("created_at") or "")[:10]
-        lines.append(f"- [{when}] {fact}" + (f"  _({tags})_" if tags else ""))
+        score = r.get("score", 0)
+        topic_str = f"[{topic}] " if topic else ""
+        lines.append(f"- ({score:.2f}) [{when}] {topic_str}{fact}")
     lines.append("")
     lines.append("If any of the above is relevant to your task, USE IT — don't re-do work already done.")
     return "\n".join(lines)
