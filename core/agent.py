@@ -726,7 +726,7 @@ def _short_target(name: str, args_json: str) -> str:
     if name in ("send_imessage", "send_email", "notify_john"):
         msg = args.get("message") or args.get("body") or args.get("text", "")
         return (str(msg)[:40] + "…") if len(str(msg)) > 40 else str(msg)
-    if name in ("complete_goal", "cancel_goal", "set_goal"):
+    if name in ("complete_goal", "cancel_goal", "set_goal", "update_goal_status"):
         return str(args.get("description") or args.get("summary") or args.get("goal_id", ""))[:48]
     if args:
         first_key, first_val = next(iter(args.items()))
