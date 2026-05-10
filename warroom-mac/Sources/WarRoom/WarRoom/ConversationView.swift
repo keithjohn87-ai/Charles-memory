@@ -230,7 +230,7 @@ struct ConversationView: View {
             }
             if let e = error {
                 HStack {
-                    Text(e).font(.caption).foregroundStyle(.red)
+                    Text(e).font(.caption).foregroundStyle(Color.bronzeError)
                     Spacer()
                     Button("Dismiss") { self.error = nil }.buttonStyle(.borderless).font(.caption)
                 }

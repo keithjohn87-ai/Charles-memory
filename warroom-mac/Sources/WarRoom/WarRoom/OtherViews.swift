@@ -21,11 +21,11 @@ struct ActivityView: View {
                         .font(.caption2.bold())
                     Text(e.convId)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.bronzeIvoryDim)
                     Spacer()
                     Text(e.createdAt.prefix(19))
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Color.bronzeIvoryFaint)
                 }
                 if let names = e.toolCallNames, !names.isEmpty {
                     HStack(spacing: 4) {
@@ -55,6 +55,7 @@ struct ActivityView: View {
                 }
             }
         }
+        .bronzeTheme()
     }
 
     private func load() async {
@@ -94,14 +95,14 @@ struct GoalsView: View {
                         Spacer()
                         Text("every \(g.advanceSeconds / 60)m")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.bronzeIvoryDim)
                     }
                     Text(g.description)
                         .lineLimit(3)
                     if !g.notes.isEmpty {
                         Text(g.notes.split(separator: "\n").last.map(String.init) ?? "")
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.bronzeIvoryDim)
                             .lineLimit(2)
                     }
                     if g.status == "active" {
@@ -125,14 +126,15 @@ struct GoalsView: View {
                 .help("Refresh goals")
             }
         }
+        .bronzeTheme()
     }
 
     private func statusColor(_ s: String) -> Color {
         switch s {
-        case "active": return .blue
-        case "done": return .green
-        case "cancelled": return .gray
-        default: return .secondary
+        case "active":    return .bronzeUser       // active = warm bronze
+        case "done":      return .bronzeBrass      // done = success-ish brass
+        case "cancelled": return .bronzeIvoryDim   // cancelled = dimmed
+        default:          return .bronzeIvoryFaint
         }
     }
 
@@ -197,18 +199,19 @@ struct SystemView: View {
                 .help("Refresh system stats")
             }
         }
+        .bronzeTheme()
     }
 
     private func statBlock(title: String, value: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
+            Text(title).font(.caption.bold()).foregroundStyle(Color.bronzeIvoryDim)
             Text(value).font(.title2)
             if !detail.isEmpty {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.caption).foregroundStyle(Color.bronzeIvoryDim)
             }
         }
         .padding()
-        .background(Color.secondary.opacity(0.08))
+        .background(Color.bronzeSurface)
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -235,14 +238,14 @@ struct ToolsView: View {
                 Text(t.name).font(.headline.monospaced())
                 Text(t.summary)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.bronzeIvoryDim)
                 if !t.triggers.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(t.triggers, id: \.self) { trig in
                             Text(trig)
                                 .font(.caption2)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.15))
+                                .background(Color.bronzeUser.opacity(0.15))
                                 .clipShape(Capsule())
                         }
                     }
@@ -260,6 +263,7 @@ struct ToolsView: View {
                 .help("Refresh tools")
             }
         }
+        .bronzeTheme()
     }
 
     private func load() async {
@@ -317,11 +321,11 @@ struct SettingsView: View {
                     Spacer()
                 }
                 if !loadStatus.isEmpty {
-                    Text(loadStatus).font(.caption).foregroundStyle(.secondary)
+                    Text(loadStatus).font(.caption).foregroundStyle(Color.bronzeIvoryDim)
                 }
                 Text("Get the secret from `\(secretFilePath)` on the Mac Studio. Server URL is `http://<tailscale-ip>:8765` once Tailscale is up.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.bronzeIvoryDim)
             }
             HStack {
                 Button("Save") {
@@ -331,7 +335,7 @@ struct SettingsView: View {
                     saved = true
                 }
                 if saved {
-                    Text("Saved.").foregroundStyle(.green).font(.caption)
+                    Text("Saved.").foregroundStyle(Color.bronzeBrass).font(.caption)
                 }
             }
         }
@@ -341,6 +345,7 @@ struct SettingsView: View {
             url = config.serverURL.absoluteString
             secret = config.sharedSecret
         }
+        .bronzeTheme()
     }
 }
 
@@ -381,6 +386,7 @@ struct SecretsView: View {
                 .help("Refresh secrets list")
             }
         }
+        .bronzeTheme()
         .task { await load() }
     }
 
@@ -394,7 +400,7 @@ struct SecretsView: View {
                     Task { await restartCharles() }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .tint(Color.bronzeCopper)
             }
         }
         .padding()
@@ -442,7 +448,7 @@ struct SecretsView: View {
                 .disabled(saving || newName.isEmpty || newValue.isEmpty)
                 Spacer()
                 if !saveStatus.isEmpty {
-                    Text(saveStatus).font(.caption).foregroundStyle(.secondary)
+                    Text(saveStatus).font(.caption).foregroundStyle(Color.bronzeIvoryDim)
                 }
             }
         }
@@ -452,11 +458,11 @@ struct SecretsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Currently in .env").font(.headline)
             if let e = error {
-                Text(e).foregroundStyle(.red).font(.caption)
+                Text(e).foregroundStyle(Color.bronzeError).font(.caption)
             }
             if secrets.isEmpty && !loading {
                 Text("(none yet — add your first secret above)")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.bronzeIvoryDim)
                     .italic()
             } else {
                 ForEach(secrets) { s in
@@ -465,7 +471,7 @@ struct SecretsView: View {
                             Text(s.name).font(.system(.body, design: .monospaced).weight(.bold))
                             Text("\(s.preview)  ·  \(s.length) chars")
                                 .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.bronzeIvoryDim)
                         }
                         Spacer()
                         Button(role: .destructive) {
@@ -476,7 +482,7 @@ struct SecretsView: View {
                         .help("Delete this secret from .env")
                     }
                     .padding(8)
-                    .background(Color.secondary.opacity(0.08))
+                    .background(Color.bronzeSurface)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
             }
@@ -485,13 +491,13 @@ struct SecretsView: View {
 
     private var explainerFooter: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Why this exists").font(.caption.bold()).foregroundStyle(.secondary)
+            Text("Why this exists").font(.caption.bold()).foregroundStyle(Color.bronzeIvoryDim)
             Text("• Pasting a credential in chat puts it in conversation history, daily logs, and (worst case) gets remembered as a long-term fact. This channel writes straight to ~/charles/.env (gitignored, mode 0600) — the only safe pipe.")
             Text("• Charles needs a restart to pick up the new value (env vars are loaded at process boot). Click 'Restart Charles' above after saving.")
             Text("• Reachable from your iPhone the same way the rest of the app is — over Tailscale.")
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.bronzeIvoryDim)
     }
 
     private func load() async {

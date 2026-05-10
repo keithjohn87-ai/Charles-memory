@@ -35,15 +35,66 @@ extension Color {
     static let bronzeError      = Color(red: 0.659, green: 0.290, blue: 0.220) // #A84A38 — burnished red
 }
 
+// MARK: - Decorative background
+
+/// Faint gear watermark in the bottom-right corner. Echoes the app icon
+/// without competing for attention. ~3% opacity — present, not intrusive.
+struct GearWatermark: View {
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                // Big gear in bottom-trailing — primary motif
+                Image(systemName: "gearshape.2.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 360, height: 360)
+                    .foregroundStyle(Color.bronzeDeep)
+                    .opacity(0.045)
+                    .rotationEffect(.degrees(15))
+                    .position(x: geo.size.width - 100, y: geo.size.height - 60)
+
+                // Small accent gear in top-leading — counterweight
+                Image(systemName: "gearshape.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 140, height: 140)
+                    .foregroundStyle(Color.bronzePrimary)
+                    .opacity(0.035)
+                    .rotationEffect(.degrees(-22))
+                    .position(x: 80, y: 90)
+
+                // Faint hairlines top + bottom — like the icon's measuring scale
+                VStack {
+                    Rectangle()
+                        .fill(Color.bronzeDeep)
+                        .frame(height: 0.5)
+                        .opacity(0.5)
+                    Spacer()
+                    Rectangle()
+                        .fill(Color.bronzeDeep)
+                        .frame(height: 0.5)
+                        .opacity(0.5)
+                }
+            }
+            .allowsHitTesting(false)  // decoration must not eat clicks
+        }
+    }
+}
+
+
 // MARK: - View modifiers
 
-/// Applies the bronze theme background + dark scheme to a top-level container.
+/// Applies the bronze theme: dark scheme + black background + faint gear
+/// watermark + bronze tint. Use on any top-level tab view.
 struct BronzeBackgroundModifier: ViewModifier {
     func body(content: Content) -> some View {
-        content
-            .background(Color.bronzeBackground.ignoresSafeArea())
-            .preferredColorScheme(.dark)
-            .tint(Color.bronzeCopper)
+        ZStack {
+            Color.bronzeBackground.ignoresSafeArea()
+            GearWatermark().ignoresSafeArea()
+            content
+        }
+        .preferredColorScheme(.dark)
+        .tint(Color.bronzeCopper)
     }
 }
 
