@@ -66,10 +66,20 @@ _current_conv: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 
 def respond_started(conv_id: str | None) -> None:
-    """Called by agent.respond() at the start of every call."""
+    """Called by agent.respond() at the start of every call.
+
+    Also rehydrates the per-conv URL block-list from persisted facts so a
+    process restart doesn't lose the "this URL is dead" knowledge.
+    """
     _in_flight.set({})
     _recent_reads.set({})
     _current_conv.set(conv_id)
+    _recall_history.set([])
+    if conv_id and conv_id not in _BLOCKED_URLS:
+        try:
+            _rehydrate_block_list(conv_id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("block-list rehydrate failed for %s: %s", conv_id, e)
 
 
 def respond_finished() -> None:
@@ -77,6 +87,7 @@ def respond_finished() -> None:
     _in_flight.set(None)
     _recent_reads.set(None)
     _current_conv.set(None)
+    _recall_history.set(None)
 
 
 def current_conv_id() -> str | None:
@@ -221,6 +232,33 @@ def check_pre_call(name: str, args: dict[str, Any]) -> str | None:
             )
         # Will mark this signature as seen AFTER pre-checks pass — see mark_in_flight().
 
+    # 3a) Fuzzy-recall nudge — if 4+ recall calls in this chain returned
+    # short results (<100 chars), the model is iterating tag-pattern guesses
+    # against a schema that doesn't match. Pivot to broad recall or
+    # search_facts. Catches the "recall(url:1)..recall(url:22)" loop pattern.
+    if name == "recall":
+        history = _recall_history.get()
+        if history is not None:
+            short_results = sum(1 for _, l in history if l < _RECALL_SHORT_RESULT_LEN)
+            if short_results >= _RECALL_NUDGE_THRESHOLD:
+                last_queries = [q for q, _ in history[-_RECALL_NUDGE_THRESHOLD:]]
+                return (
+                    f"[error] you've made {short_results} recall() calls in "
+                    f"this chain that all returned <100 chars (essentially "
+                    f"empty). Your tag schema assumption is wrong. Recent "
+                    f"queries: {last_queries}\n"
+                    f"PIVOT NOW:\n"
+                    f"  - Try recall(query='<broad keyword>') without "
+                    f"sub-pattern guesses (e.g., 'url_corpus' alone, not "
+                    f"'url_corpus url:1').\n"
+                    f"  - OR call search_facts(query='...') for substring "
+                    f"matching across fact text.\n"
+                    f"  - OR call list_goals(status='all') to see your prior "
+                    f"goal notes which often have what you're looking for.\n"
+                    f"Do NOT make another narrow recall — your schema "
+                    f"assumption is wrong."
+                )
+
     # 4) read_file de-dup within a respond chain — return cached content
     #    fingerprint instead of the full file.
     if name == "read_file":
@@ -295,18 +333,22 @@ def post_call(name: str, args: dict[str, Any], result: str) -> None:
             url = (args.get("url") or "").strip()
             if url:
                 m = _BLOCKED_HEADER_RE.search(result[:300])
+                reason = None
                 if m:
                     reason = m.group(1).lower()
+                else:
+                    reason = _classify_legacy_blocked(result)
+                if reason:
                     _BLOCKED_URLS[conv_id][url] = reason
                     log.info("URL blocked for conv=%s: %s (%s)", conv_id, url, reason)
-                else:
-                    legacy_reason = _classify_legacy_blocked(result)
-                    if legacy_reason:
-                        _BLOCKED_URLS[conv_id][url] = legacy_reason
-                        log.info(
-                            "URL legacy-blocked for conv=%s: %s (%s)",
-                            conv_id, url, legacy_reason,
-                        )
+                    # Persist so process restarts don't forget which URLs are
+                    # dead. Auto-recall filter excludes blocked_url tag from
+                    # user-message context to keep prompts clean.
+                    _persist_blocked_url(conv_id, url, reason)
+
+        # Track recall calls for fuzzy-recall nudge (see check_pre_call).
+        if name == "recall":
+            _track_recall_result(args.get("query") or "", result)
 
         # Cache successful read_file by path (only if it didn't error).
         if name == "read_file":
@@ -316,6 +358,74 @@ def post_call(name: str, args: dict[str, Any], result: str) -> None:
                 recent[path] = hashlib.sha256(result.encode("utf-8", errors="replace")).hexdigest()
     except Exception as e:  # noqa: BLE001 — guards must never break the dispatcher
         log.warning("post_call hook failed for %s: %s", name, e)
+
+
+# ---------------------------------------------------------------------------
+# URL block-list persistence — survives process restarts
+# ---------------------------------------------------------------------------
+
+def _persist_blocked_url(conv_id: str, url: str, reason: str) -> None:
+    """Save a blocked-URL fact tagged 'blocked_url,<reason>,<conv_short>'.
+    Auto-recall filter (in agent._build_auto_recall_note) excludes this tag
+    so it doesn't pollute user-message context. Loaded by _rehydrate_block_list
+    on respond_started so a fresh process boots with the prior knowledge."""
+    try:
+        from core import memory as _mem
+        # Dedup: don't write the same blocked URL more than once
+        existing = _mem.search_facts(f"blocked_url {url}", limit=1)
+        if existing:
+            return
+        _mem.add_fact(
+            f"BLOCKED_URL conv={conv_id} url={url} reason={reason}",
+            tags=f"blocked_url,blocked_url:{reason},conv:{conv_id[:30]}",
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("persist_blocked_url failed: %s", e)
+
+
+def _rehydrate_block_list(conv_id: str) -> None:
+    """On respond_started, load any persisted blocked URLs for this conv from
+    long_term_facts back into _BLOCKED_URLS so the in-memory check_pre_call
+    short-circuits work after a process restart."""
+    from core import memory as _mem
+    facts = _mem.search_facts(f"conv:{conv_id[:30]}", limit=100)
+    n = 0
+    for f in facts:
+        tags = (f.get("tags") or "").lower()
+        if "blocked_url" not in tags:
+            continue
+        # Parse "BLOCKED_URL conv=X url=Y reason=Z" from fact text
+        text = f.get("fact") or ""
+        m = re.match(r"BLOCKED_URL conv=(\S+) url=(\S+) reason=(\S+)", text)
+        if not m:
+            continue
+        url = m.group(2)
+        reason = m.group(3)
+        _BLOCKED_URLS[conv_id][url] = reason
+        n += 1
+    if n:
+        log.info("rehydrated %d blocked URLs for conv=%s", n, conv_id)
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-recall nudge — detect recall iteration with empty results
+# ---------------------------------------------------------------------------
+
+# Per-respond tracker: list of (query, result_len) for each recall call.
+_recall_history: contextvars.ContextVar[list[tuple[str, int]] | None] = contextvars.ContextVar(
+    "tool_guards_recall_history", default=None,
+)
+_RECALL_NUDGE_THRESHOLD = 4   # 4 recalls returning <100 chars = pattern misuse
+_RECALL_SHORT_RESULT_LEN = 100
+
+
+def _track_recall_result(query: str, result: str) -> None:
+    """Record this recall call's outcome. Reset by respond_started."""
+    history = _recall_history.get()
+    if history is None:
+        history = []
+        _recall_history.set(history)
+    history.append((query, len(result)))
 
 
 # ---------------------------------------------------------------------------

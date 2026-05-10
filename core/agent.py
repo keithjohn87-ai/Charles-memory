@@ -453,7 +453,13 @@ def _extract_keywords(text: str, max_kw: int = 5) -> list[str]:
 def _build_auto_recall_note(user_message: str) -> str:
     """Search long_term_facts for keywords from the user's message and return
     a system-note string with the top matches. Empty string if nothing
-    relevant was found."""
+    relevant was found.
+
+    Caps: 3 facts max, 200 chars per fact (was 5 facts × 300 chars). With
+    a 360+ fact store, the broader cap pulled 30K+ chars into the prompt
+    and bloated context — observed 39K total prompt size on simple "Good
+    Morning" greetings. Tightened to keep the recall block under ~1500 chars.
+    """
     keywords = _extract_keywords(user_message)
     if not keywords:
         return ""
@@ -472,12 +478,12 @@ def _build_auto_recall_note(user_message: str) -> str:
             seen_ids.add(r["id"])
             # Skip noisy auto-generated facts that wouldn't help John
             tags = (r.get("tags") or "").lower()
-            if any(t in tags for t in ("superseded", "intervention,auto", "prune,auto", "credential_scrub")):
+            if any(t in tags for t in ("superseded", "intervention,auto", "prune,auto", "credential_scrub", "blocked_url")):
                 continue
             hits.append(r)
-            if len(hits) >= 5:
+            if len(hits) >= 3:
                 break
-        if len(hits) >= 5:
+        if len(hits) >= 3:
             break
 
     if not hits:
@@ -485,21 +491,16 @@ def _build_auto_recall_note(user_message: str) -> str:
 
     lines = [
         "## Relevant memory from past sessions (auto-recalled):",
-        "Search keywords used: " + ", ".join(keywords),
+        "Search keywords: " + ", ".join(keywords),
         "",
     ]
     for r in hits:
-        fact = (r["fact"] or "").strip()[:300]
-        tags = (r.get("tags") or "").strip()
+        fact = (r["fact"] or "").strip()[:200]
+        tags = (r.get("tags") or "").strip()[:80]
         when = (r.get("created_at") or "")[:10]
-        lines.append(f"- [{when}] {fact}" + (f"  _(tags: {tags})_" if tags else ""))
+        lines.append(f"- [{when}] {fact}" + (f"  _({tags})_" if tags else ""))
     lines.append("")
-    lines.append(
-        "If any of the above is relevant to the user's request, USE IT — "
-        "don't re-do work that's already done. Mention what you remembered "
-        "and only do fresh exploration if the prior finding is incomplete "
-        "or the user explicitly asks you to redo it."
-    )
+    lines.append("If any of the above is relevant to your task, USE IT — don't re-do work already done.")
     return "\n".join(lines)
 
 
