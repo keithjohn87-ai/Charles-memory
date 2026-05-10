@@ -125,6 +125,19 @@ def cancel(goal_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def update_status(goal_id: int, new_status: str) -> bool:
+    """Update a goal's status and reset last_advanced_at for resumption."""
+    valid = {'active', 'paused', 'done', 'cancelled'}
+    if new_status not in valid:
+        raise ValueError(f"invalid status {new_status!r}; must be one of {valid}")
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE goals SET status=?, last_advanced_at=NULL WHERE id=?",
+            (new_status, goal_id),
+        )
+        return cur.rowcount > 0
+
+
 def ripe_goals(now_iso: str | None = None, limit: int = 5) -> list[dict]:
     """Return active goals whose last_advanced_at is older than advance_seconds (or null).
 
