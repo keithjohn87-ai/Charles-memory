@@ -183,21 +183,31 @@ struct ConversationView: View {
     private var iOSStackLayout: some View {
         VStack(spacing: 0) {
             if let convId = selectedConvId {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(turns) { turn in
-                            TurnRow(turn: turn).id(turn.id)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        // VStack (not LazyVStack) — for typical 100-turn
+                        // conversations the eager render is cheap, and it
+                        // avoids LazyVStack's quirk of rebuilding rows on
+                        // every poll cycle (which was yanking scroll position).
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(turns) { turn in
+                                TurnRow(turn: turn).id(turn.id)
+                            }
+                            Color.clear.frame(height: 1).id("bottom")
                         }
+                        .padding()
                     }
-                    .padding()
+                    // Only scroll to bottom when the LAST turn id changes —
+                    // i.e., a genuinely new message arrived. Polling cycles
+                    // that return the same set of turns DON'T trigger this,
+                    // so reading older history isn't interrupted.
+                    .onChange(of: turns.last?.id) { _, _ in
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .onAppear {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                 }
-                // defaultScrollAnchor(.bottom) anchors the view at the bottom
-                // by default — so each polling reload of `turns` keeps the
-                // newest message in view instead of yanking the scroll
-                // position elsewhere. iOS 17+. Replaces the unstable
-                // ScrollViewReader + onChange(turns.count) combo, which on
-                // iOS reset to top whenever LazyVStack contents shifted.
-                .defaultScrollAnchor(.bottom)
                 Divider()
                 if convId == "charles_log" {
                     HStack(spacing: 6) {
