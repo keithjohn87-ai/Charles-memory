@@ -395,15 +395,22 @@ def trim_repeating_replies(
             "loop detected in conv=%s — deleted %d turns starting at id=%d (last 3 assistant similarity above %.2f)",
             conversation_id, deleted, oldest_poisoned_id, threshold,
         )
-        # Save audit trail
+        # Save audit trail — route through canonical taxonomy.
+        # Topic 'loop_recovery' is a canonical leaf under system_health.
+        _audit_fact = (
+            f"Auto-recovery from response loop in conv {conversation_id}: "
+            f"deleted {deleted} turns from id {oldest_poisoned_id} onward. "
+            f"Pattern locked into a {len(rows)}-turn near-identical reply tail."
+        )
+        _audit_embed = None
+        try:
+            from core import embeddings as _embed
+            _audit_embed = _embed.encode(_audit_fact)
+        except Exception:  # noqa: BLE001
+            pass
         c.execute(
-            "INSERT INTO long_term_facts (fact, tags) VALUES (?, ?)",
-            (
-                f"Auto-recovery from response loop in conv {conversation_id}: "
-                f"deleted {deleted} turns from id {oldest_poisoned_id} onward. "
-                f"Pattern locked into a {len(rows)}-turn near-identical reply tail.",
-                "incident,loop_recovery,auto",
-            ),
+            "INSERT INTO long_term_facts (fact, tags, topic, embedding) VALUES (?, ?, ?, ?)",
+            (_audit_fact, "incident,loop_recovery,auto", "loop_recovery", _audit_embed),
         )
         return deleted
 
@@ -432,13 +439,19 @@ def reset_conversation(conversation_id: str, keep_last_user_turn: bool = True) -
                 (conversation_id,),
             ).rowcount
         log.warning("manual reset of conv=%s — deleted %d turns", conversation_id, deleted)
+        _audit_fact = (
+            f"Manual conversation reset on {conversation_id}: deleted {deleted} turns "
+            f"(keep_last_user={keep_last_user_turn})."
+        )
+        _audit_embed = None
+        try:
+            from core import embeddings as _embed
+            _audit_embed = _embed.encode(_audit_fact)
+        except Exception:  # noqa: BLE001
+            pass
         c.execute(
-            "INSERT INTO long_term_facts (fact, tags) VALUES (?, ?)",
-            (
-                f"Manual conversation reset on {conversation_id}: deleted {deleted} turns "
-                f"(keep_last_user={keep_last_user_turn}).",
-                "incident,manual_reset",
-            ),
+            "INSERT INTO long_term_facts (fact, tags, topic, embedding) VALUES (?, ?, ?, ?)",
+            (_audit_fact, "incident,manual_reset", "manual_reset", _audit_embed),
         )
     # Drop the URL block-list for this conv so a fresh start really IS fresh.
     try:
@@ -459,37 +472,131 @@ def add_fact(
     source: str | None = None,
     confidence: float = 1.0,
 ) -> int:
-    """Save a fact. Embeds it once (via core.embeddings) so semantic recall
-    works immediately. If topic is None, defaults to the first tag (legacy
-    behavior for code paths that haven't been updated yet)."""
+    """Save a fact. Embeds it once (via core.embeddings). Topic is matched
+    against the canonical taxonomy (topics table). If topic isn't in the
+    canonical list, semantic-matches against existing leaf topics and
+    auto-routes to the closest. If no good match, parks under
+    'uncategorized'.
+
+    INGESTION GATE (2026-05-10 evening, per John): topics are NOT auto-created
+    from free-text tags anymore. The taxonomy is John's curated tree. New
+    topics only land via explicit topic_upsert by Charles or John.
+    """
     fact = fact.strip()
     if not fact:
         raise ValueError("empty fact")
-    # Topic defaults to first tag if not supplied — back-compat for callers
-    # that still pass only tags.
-    if topic is None:
-        first_tag = (tags.split(",") or [""])[0].strip()
-        topic = first_tag or None
+
     # Embed inline. Failure (e.g. model not yet loaded) shouldn't block the
-    # save — fall through with embedding=None and the next migration sweep
-    # can backfill.
+    # save — fall through with embedding=None.
     embedding_bytes: bytes | None = None
     try:
         from core import embeddings as _embed
         embedding_bytes = _embed.encode(fact)
     except Exception as e:  # noqa: BLE001
         log.warning("embedding failed for new fact (saving without): %s", e)
+
+    # INGESTION GATE — match topic against canonical taxonomy
+    canonical_topic = _route_to_canonical_topic(topic, tags, fact, embedding_bytes)
+
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO long_term_facts (fact, tags, topic, source, confidence, embedding) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (fact, tags.strip(), topic, source, float(confidence), embedding_bytes),
+            (fact, tags.strip(), canonical_topic, source, float(confidence), embedding_bytes),
         )
         c.execute(
             "INSERT INTO daily_log (kind, text) VALUES (?, ?)",
             ("remembered", fact[:500]),
         )
         return cur.lastrowid or 0
+
+
+def _route_to_canonical_topic(
+    requested_topic: str | None,
+    tags: str,
+    fact_text: str,
+    embedding_bytes: bytes | None,
+) -> str:
+    """Route a fact to a canonical topic. Order of preference:
+    1. requested_topic if it exists in the topics table
+    2. Any tag that matches an existing topic name
+    3. Semantic-match against leaf topics' descriptions (best cosine)
+    4. 'uncategorized' as final fallback
+
+    Returns the canonical topic name to write into long_term_facts.topic.
+    """
+    # Normalize the requested topic to slug form
+    def _slug(s: str) -> str:
+        return s.strip().lower().replace(" ", "_").replace("/", "_")
+
+    with _conn() as c:
+        # Build the canonical leaf list (topics that have a parent — these are
+        # the buckets we want to route facts into, not the parent containers).
+        leaves = c.execute(
+            "SELECT name, title, description FROM topics WHERE parent_topic_id IS NOT NULL"
+        ).fetchall()
+        leaf_names = {r["name"] for r in leaves}
+        # Also include parents themselves as valid topics — sometimes a fact
+        # doesn't fit any leaf and the parent is the right bucket.
+        all_topics = c.execute("SELECT name FROM topics").fetchall()
+        all_topic_names = {r["name"] for r in all_topics}
+
+    # 1. requested topic, if canonical
+    if requested_topic:
+        slug = _slug(requested_topic)
+        if slug in all_topic_names:
+            return slug
+
+    # 2. any tag that matches a canonical topic
+    if tags:
+        for t in tags.split(","):
+            slug = _slug(t)
+            if slug in all_topic_names:
+                return slug
+
+    # 3. semantic match against ALL topics (parents + leaves), prefer leaves
+    if embedding_bytes:
+        try:
+            from core import embeddings as _embed
+            qvec = _embed.unpack(embedding_bytes)
+            with _conn() as c:
+                all_rows = c.execute(
+                    "SELECT name, title, description, parent_topic_id FROM topics"
+                ).fetchall()
+            if all_rows:
+                candidates = []
+                for r in all_rows:
+                    desc = f"{r['title']}. {r['description'] or ''}"
+                    blob = _embed.encode(desc)
+                    candidates.append((r["name"], blob))
+                scored = _embed.topk_by_cosine(qvec, candidates, k=3)
+                # Prefer leaves over parents — if top hit is a parent and any
+                # leaf is within 0.05 below it, take the leaf instead
+                row_by_name = {r["name"]: r for r in all_rows}
+                top_name, top_score = scored[0]
+                if top_score >= 0.12:
+                    # Check if top hit is a parent and a close-enough leaf exists
+                    top_row = row_by_name[top_name]
+                    if top_row["parent_topic_id"] is None:
+                        for cand_name, cand_score in scored[1:]:
+                            cand_row = row_by_name[cand_name]
+                            if cand_row["parent_topic_id"] is not None and cand_score >= top_score - 0.05:
+                                return cand_name
+                    return top_name
+        except Exception as e:  # noqa: BLE001
+            log.warning("semantic topic-route failed (falling back): %s", e)
+
+    # 4. fallback
+    # Make sure 'uncategorized' exists in the topics table so the FK-like
+    # relationship still holds
+    with _conn() as c:
+        existing = c.execute("SELECT id FROM topics WHERE name='uncategorized'").fetchone()
+        if not existing:
+            c.execute(
+                "INSERT INTO topics (name, title, description) VALUES (?, ?, ?)",
+                ("uncategorized", "Uncategorized", "Facts that didn't match any canonical topic. Review and re-route periodically."),
+            )
+    return "uncategorized"
 
 
 def search_facts(query: str, limit: int = 5) -> list[dict]:
